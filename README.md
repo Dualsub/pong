@@ -1,10 +1,11 @@
-# Golang Mutiplayer
+# Pong Multiplayer with Golang and Websockets
 
-Simple realtime multiplayer implementation of the classic game Pong. Weekend project to learn golang.
+Simple realtime multiplayer implementation of the classic game Pong. A weekend project to learn Golang.
 
 ## Features
+
 ### Implemented
-- [x] Realtime websocket pong game
+- [x] Realtime multiplayer pong game over websockets
 
 ### Possible future features
 - [ ] Add user authentication

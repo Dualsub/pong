@@ -190,8 +190,8 @@ func (gs *GameSession) Update(dt time.Duration) {
 	if velocityScale > MAX_BALL_SPEED_FACTOR {
 		velocityScale = MAX_BALL_SPEED_FACTOR
 	}
-	gs.Ball.X = Clamp(gs.Ball.X+gs.Ball.VelocityX*float32(dt.Seconds())*velocityScale, 0, float32(COURT_WIDTH))
-	gs.Ball.Y = Clamp(gs.Ball.Y+gs.Ball.VelocityY*float32(dt.Seconds())*velocityScale, 0, float32(COURT_HEIGHT))
+	gs.Ball.X = Clamp(gs.Ball.X+gs.Ball.VelocityX*float32(dt.Seconds())*velocityScale, -BALL_RADIUS, float32(COURT_WIDTH+BALL_RADIUS))
+	gs.Ball.Y = Clamp(gs.Ball.Y+gs.Ball.VelocityY*float32(dt.Seconds())*velocityScale, -BALL_RADIUS, float32(COURT_HEIGHT+BALL_RADIUS))
 
 	// Check for collisions
 	if gs.Ball.Y < BALL_RADIUS {
@@ -207,7 +207,7 @@ func (gs *GameSession) Update(dt time.Duration) {
 	// Check for player collisions
 	for _, player := range gs.Players {
 		// Test collision with ball radius taken into account
-		if (gs.Ball.X > player.X+PLAYER_WIDTH) || (gs.Ball.X+BALL_RADIUS < player.X) || (gs.Ball.Y > player.Y+PLAYER_HEIGHT) || (gs.Ball.Y+BALL_RADIUS < player.Y) {
+		if (gs.Ball.X-BALL_RADIUS < player.X+PLAYER_WIDTH) && (gs.Ball.X+BALL_RADIUS > player.X) && (gs.Ball.Y-BALL_RADIUS < player.Y+PLAYER_HEIGHT) && (gs.Ball.Y+BALL_RADIUS > player.Y) {
 			gs.Ball.VelocityX *= -1
 		}
 	}
