@@ -3,15 +3,19 @@
 Weekend project to learn golang.
 
 ## Features
-- [ ] Login with Google OAuth
-- [ ] Matchmaking
-- [ ] Realtime websocket pong game
+### Implemented
+- [x] Realtime websocket pong game
+
+### Possible future features
+- [ ] Add user authentication
+- [ ] Add match making
+
 
 ## Run locally
 
 Running server
 ```sh
-server % go run main.go
+server % go run main.go game.go
 ```
 
 Running client
