@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	mathrand "math/rand"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -29,6 +30,8 @@ const COURT_WIDTH = 800
 const COURT_HEIGHT = 600
 
 const MAX_PLAYERS = 2
+
+const INV_SQRT_2 = 1.0 / math.Sqrt2
 
 type InputState struct {
 	UpPressed   bool
@@ -87,9 +90,9 @@ func NewGameSession(id int) *GameSession {
 		Players: make(map[int32]*Player),
 		Ball: Ball{
 			X:         float32(COURT_WIDTH / 2),
-			Y:         float32(COURT_HEIGHT / 2),
-			VelocityX: BALL_SPEED,
-			VelocityY: 0,
+			Y:         float32((COURT_HEIGHT-2*BALL_RADIUS)*mathrand.Float32() + BALL_RADIUS),
+			VelocityX: BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1),
+			VelocityY: BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1),
 		},
 		Time:             0,
 		RegisterPlayer:   make(chan *Player),
@@ -190,6 +193,7 @@ func (gs *GameSession) Update(dt time.Duration) {
 	if velocityScale > MAX_BALL_SPEED_FACTOR {
 		velocityScale = MAX_BALL_SPEED_FACTOR
 	}
+
 	gs.Ball.X = Clamp(gs.Ball.X+gs.Ball.VelocityX*float32(dt.Seconds())*velocityScale, -BALL_RADIUS, float32(COURT_WIDTH+BALL_RADIUS))
 	gs.Ball.Y = Clamp(gs.Ball.Y+gs.Ball.VelocityY*float32(dt.Seconds())*velocityScale, -BALL_RADIUS, float32(COURT_HEIGHT+BALL_RADIUS))
 
@@ -231,11 +235,12 @@ func (gs *GameSession) Update(dt time.Duration) {
 
 		// Reset ball position
 		gs.Ball.X = float32(COURT_WIDTH / 2)
-		gs.Ball.Y = float32(COURT_HEIGHT / 2)
+		gs.Ball.Y = float32((COURT_HEIGHT-2*BALL_RADIUS)*mathrand.Float32() + BALL_RADIUS)
 
 		// Reset ball velocity
-		gs.Ball.VelocityX = BALL_SPEED
-		gs.Ball.VelocityY = 0
+
+		gs.Ball.VelocityX = BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1)
+		gs.Ball.VelocityY = BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1)
 
 		// Reset time
 		gs.Time = 0
