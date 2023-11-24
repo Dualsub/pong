@@ -1,6 +1,6 @@
 # Golang Mutiplayer
 
-Weekend project to learn golang.
+Simple realtime multiplayer implementation of the classic game Pong. Weekend project to learn golang.
 
 ## Features
 ### Implemented
