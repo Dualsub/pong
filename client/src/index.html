@@ -9,14 +9,15 @@
     <title>Go Multiplayer</title>
 </head>
 
-<body class="w-full h-screen flex flex-col justify-center bg-blue-400">
-    <div class="mb-8 mx-auto  flex flex-col justify-center text-center max-w-2xl text-white drop-shadow-md">
+<body class="w-full flex flex-col justify-center bg-blue-400">
+    <div class="my-8 mx-auto  flex flex-col justify-center text-center max-w-2xl text-white drop-shadow-md">
         <h1 class="font-extrabold text-2xl mb-2">Pong Multiplayer with Golang.</h1>
         <p class="text-base">My first project with Golang, created over the course of a few days. It's a simple pong
             game with multiplayer
             support.</p>
     </div>
-    <canvas id="game" width="800" height="600" class="mx-auto bg-black"></canvas>
+    <canvas id="game" width="800" height="600"
+        class="mx-auto bg-black w-full max-w-[800px] aspect-w-4 aspect-h-3"></canvas>
     <script src="./index.ts"></script>
 </body>
 

@@ -39,11 +39,12 @@ func (sessions *Sessions) Run() {
 			fmt.Println("Sessions:", len(sessions.Sessions))
 		case session := <-sessions.Register:
 			sessions.Sessions[session.Id] = session
+			session.Sessions = sessions
 			fmt.Println("Registered session", session.Id)
 			go session.Run()
-			fmt.Println("Started session", session.Id)
 		case session := <-sessions.Unregister:
 			delete(sessions.Sessions, session.Id)
+			fmt.Println("Unregistered session", session.Id)
 		}
 	}
 }

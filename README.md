@@ -6,8 +6,10 @@ Simple realtime multiplayer implementation of the classic game Pong. A weekend p
 
 ### Implemented
 - [x] Realtime multiplayer pong game over websockets
+- [x] Playable on mobile devices
 
 ### Possible future features
+- [ ] Client side prediction and server reconciliation
 - [ ] Add user authentication
 - [ ] Add match making
 

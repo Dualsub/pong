@@ -124,6 +124,30 @@ window.addEventListener("keyup", (event) => {
   }
 }, false);
 
+window.addEventListener("touchstart", (event) => {
+  if (event.touches[0].clientY < canvas.height / 2) {
+    updateAndSendInput({ up: true });
+  } else {
+    updateAndSendInput({ down: true });
+  }
+}, false);
+
+window.addEventListener("touchend", (event) => {
+  updateAndSendInput({ up: false, down: false });
+}, false);
+
+window.addEventListener("touchcancel", (event) => {
+  updateAndSendInput({ up: false, down: false });
+}, false);
+
+window.addEventListener("touchmove", (event) => {
+  if (event.touches[0].clientY < canvas.height / 2) {
+    updateAndSendInput({ up: true });
+  } else {
+    updateAndSendInput({ down: true });
+  }
+}, false);
+
 // Render
 const ctx = canvas.getContext("2d");
 const render = () => {

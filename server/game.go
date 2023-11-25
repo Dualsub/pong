@@ -15,14 +15,12 @@ import (
 // 60 Hz
 const SESSION_DELTA_TIME = 16666666 * time.Nanosecond
 
-// 20 Hz
-// const SESSION_DELTA_TIME = 50000 * time.Nanosecond
-
 const BALL_SPEED = 100
 const MAX_BALL_SPEED_FACTOR = 10
-const BALL_SPEED_RATE = 1.015
+const BALL_SPEED_RATE = 1.018
 const BALL_RADIUS = 10
-const PLAYER_SPEED = 100
+
+const PLAYER_SPEED = 150
 const PLAYER_WIDTH = 10
 const PLAYER_HEIGHT = 100
 
@@ -31,6 +29,7 @@ const COURT_HEIGHT = 600
 
 const MAX_PLAYERS = 2
 
+// Save some calculations :)
 const INV_SQRT_2 = 1.0 / math.Sqrt2
 
 type InputState struct {
@@ -70,7 +69,7 @@ type GameSession struct {
 	RegisterPlayer   chan *Player
 	UnregisterPlayer chan *Player
 	RegisterInput    chan InputUpdate
-	Ready            chan bool
+	Sessions         *Sessions
 }
 
 func Clamp(f float32, min float32, max float32) float32 {
@@ -98,7 +97,6 @@ func NewGameSession(id int) *GameSession {
 		RegisterPlayer:   make(chan *Player),
 		UnregisterPlayer: make(chan *Player),
 		RegisterInput:    make(chan InputUpdate),
-		Ready:            make(chan bool),
 	}
 }
 
@@ -303,6 +301,10 @@ func (gs *GameSession) Run() {
 			gs.AddPlayer(player)
 		case player := <-gs.UnregisterPlayer:
 			gs.RemovePlayer(player)
+			if len(gs.Players) == 0 {
+				gs.Sessions.Unregister <- gs
+				return
+			}
 		case inputUpdate := <-gs.RegisterInput:
 			gs.AddPlayerInput(inputUpdate)
 		case <-tick.C:
