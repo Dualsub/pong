@@ -15,7 +15,7 @@ import (
 // 60 Hz
 const SESSION_DELTA_TIME = 16666666 * time.Nanosecond
 
-const BALL_SPEED = 100
+const BALL_SPEED = 175
 const MAX_BALL_SPEED_FACTOR = 10
 const BALL_SPEED_RATE = 1.018
 const BALL_RADIUS = 10
@@ -36,6 +36,7 @@ type InputState struct {
 	UpPressed   bool
 	DownPressed bool
 	Timestamp   time.Time
+	Sequence    uint32
 }
 
 type InputUpdate struct {
@@ -112,12 +113,19 @@ func (gs *GameSession) AddPlayer(player *Player) {
 	rand.Read(b)
 	player.Id = int32(b[0])<<24 | int32(b[1])<<16 | int32(b[2])<<8 | int32(b[3])
 
-	// Set player position
-	if len(gs.Players) == 0 {
-		player.X = 0
+	// Check if other player is on the left or right
+	if len(gs.Players) == 1 {
+		for _, otherPlayer := range gs.Players {
+			if otherPlayer.X < float32(COURT_WIDTH/2) {
+				player.X = float32(COURT_WIDTH - PLAYER_WIDTH)
+			} else {
+				player.X = 0
+			}
+		}
 	} else {
-		player.X = float32(COURT_WIDTH - PLAYER_WIDTH)
+		player.X = 0
 	}
+
 	player.Y = float32(COURT_HEIGHT/2 - PLAYER_HEIGHT/2)
 
 	// Add player to session
@@ -140,6 +148,31 @@ func (gs *GameSession) AddPlayerInput(inputUpdate InputUpdate) {
 	}
 
 	player.InputStates = append(player.InputStates, inputUpdate.InputState)
+}
+
+func ReadInput(p []byte, playerId int32) InputUpdate {
+	var rawInputState struct { // 2 bytes
+		UpPressed   byte
+		DownPressed byte
+		Timestamp   int64 // Retrieved on client side using Date.now()
+		Sequence    uint32
+	}
+
+	if err := binary.Read(bytes.NewReader(p), binary.LittleEndian, &rawInputState); err != nil {
+		panic(err)
+	}
+
+	timestamp := time.Unix(0, rawInputState.Timestamp*int64(time.Millisecond))
+
+	return InputUpdate{
+		PlayerId: playerId,
+		InputState: InputState{
+			UpPressed:   rawInputState.UpPressed == 1,
+			DownPressed: rawInputState.DownPressed == 1,
+			Timestamp:   timestamp,
+			Sequence:    rawInputState.Sequence,
+		},
+	}
 }
 
 func (gs *GameSession) Update(dt time.Duration) {
@@ -256,16 +289,19 @@ func (gs *GameSession) Broadcast() {
 	var buffer bytes.Buffer
 
 	for _, player := range gs.Players {
-		if err := binary.Write(&buffer, binary.LittleEndian, player.Id); err != nil {
-			panic(err)
+		playerData := struct {
+			Id    int32
+			Score int32
+			X     float32
+			Y     float32
+		}{
+			Id:    player.Id,
+			Score: player.Score,
+			X:     player.X,
+			Y:     player.Y,
 		}
-		if err := binary.Write(&buffer, binary.LittleEndian, player.Score); err != nil {
-			panic(err)
-		}
-		if err := binary.Write(&buffer, binary.LittleEndian, player.X); err != nil {
-			panic(err)
-		}
-		if err := binary.Write(&buffer, binary.LittleEndian, player.Y); err != nil {
+
+		if err := binary.Write(&buffer, binary.LittleEndian, playerData); err != nil {
 			panic(err)
 		}
 	}
@@ -284,6 +320,16 @@ func (gs *GameSession) Broadcast() {
 		if err := binary.Write(&playerBuffer, binary.LittleEndian, player.Id); err != nil {
 			panic(err)
 		}
+
+		var lastSequence uint32 = 0
+		if len(player.InputStates) > 0 {
+			lastSequence = player.InputStates[len(player.InputStates)-1].Sequence
+		}
+
+		if err := binary.Write(&playerBuffer, binary.LittleEndian, lastSequence); err != nil {
+			panic(err)
+		}
+
 		playerBuffer.Write(buffer.Bytes())
 		player.Connection.WriteMessage(websocket.BinaryMessage, playerBuffer.Bytes())
 	}

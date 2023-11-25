@@ -36,7 +36,15 @@ func (sessions *Sessions) Run() {
 	for {
 		select {
 		case <-ticker.C:
-			fmt.Println("Sessions:", len(sessions.Sessions))
+			fmt.Println("Sessions:")
+			for id := range sessions.Sessions {
+				fmt.Println("  ", id)
+				fmt.Println("    Players:")
+				for playerId := range sessions.Sessions[id].Players {
+					fmt.Println("      ", playerId)
+				}
+			}
+
 		case session := <-sessions.Register:
 			sessions.Sessions[session.Id] = session
 			session.Sessions = sessions
@@ -124,19 +132,11 @@ func main() {
 					break loop
 				}
 
-				if (mt != websocket.BinaryMessage) || (len(p) != 2) {
+				if (mt != websocket.BinaryMessage) && (len(p) != (2 + 4 + 4)) {
 					continue loop
 				}
 
-				inputUpdate := InputUpdate{
-					PlayerId: player.Id,
-					InputState: InputState{
-						UpPressed:   p[0] == 1,
-						DownPressed: p[1] == 1,
-						Timestamp:   time.Now(),
-					},
-				}
-
+				inputUpdate := ReadInput(p, player.Id)
 				session.RegisterInput <- inputUpdate
 			}
 		}

@@ -18,15 +18,23 @@ interface InputState {
   down: boolean;
 }
 
+type InputUpdate = InputState & {
+  timestamp: number;
+  sequenceNumber: number;
+}
+
 // Constants
-const BALL_SPEED = 100
+const BALL_SPEED = 175
 const BALL_RADIUS = 10
-const PLAYER_SPEED = 0.1
+
+const PLAYER_SPEED = 150
 const PLAYER_WIDTH = 10
 const PLAYER_HEIGHT = 100
 
 const COURT_WIDTH = 800
 const COURT_HEIGHT = 600
+
+const MAX_INPUT_BUFFER_SIZE = 10;
 
 // State
 const gameState: GameState = {
@@ -49,37 +57,90 @@ ws.addEventListener("open", (event) => {
   console.log("Connected to server.");
 });
 
+// Connection closed
+ws.addEventListener("close", (event) => {
+  console.log("Disconnected from server.");
+});
+
 // Listen for messages
 ws.addEventListener("message", (event) => {
   const buffer = event.data as ArrayBuffer;
   const view = new DataView(buffer);
 
-  const numPlayers = (view.byteLength - (4 + 8)) / 16;
+  const numPlayers = (view.byteLength - (4 + 4 + 8)) / 16;
   // First 4 bytes is the player id on this client, then 2 players
   const myId = view.getInt32(0, true);
+  const sequenceNumber = view.getUint32(4, true);
+
   const players: Array<Player> = Array.from({ length: numPlayers }).map((_, i) => ({
-    id: view.getInt32(4 + i * 16, true),
-    score: view.getInt32(8 + i * 16, true),
-    x: view.getFloat32(12 + i * 16, true),
-    y: view.getFloat32(16 + i * 16, true),
+    id: view.getInt32(8 + i * 16, true),
+    score: view.getInt32(12 + i * 16, true),
+    x: view.getFloat32(16 + i * 16, true),
+    y: view.getFloat32(20 + i * 16, true),
   }) as Player);
 
   const ball = {
-    x: view.getFloat32(4 + numPlayers * 16, true),
-    y: view.getFloat32(8 + numPlayers * 16, true),
+    x: view.getFloat32(8 + numPlayers * 16, true),
+    y: view.getFloat32(12 + numPlayers * 16, true),
   };
 
   // Update game state
   gameState.player = players.find((player) => player.id === myId);
+  gameState.player = { ...gameState.player, ...getPlayerPosition(gameState.player.x, gameState.player.y, sequenceNumber) };
   gameState.opponent = players.find((player) => player.id !== myId);
   gameState.ball = ball;
 });
+
+// Find the last acknowledged input, remove all inputs before that, and replay all inputs after that to get the current position
+const getPlayerPosition = (serverX, serverY, sequenceNumber: number) => {
+  const lastAcknowledgedInputIndex = inputBuffer.findIndex((input) => input.sequenceNumber === sequenceNumber);
+  const lastAcknowledgedInput = inputBuffer[lastAcknowledgedInputIndex];
+  if (!lastAcknowledgedInput) {
+    return { x: serverX, y: serverY };
+  }
+
+  const inputsToReplay = inputBuffer.filter(iu => iu.timestamp > lastAcknowledgedInput.timestamp);
+
+  let position = { x: serverX, y: serverY };
+  inputsToReplay.forEach((input, i) => {
+    // Find delta in time between current and next input, except for the last input, where we use the time until now
+    let timeDelta = 0;
+    if (i === inputsToReplay.length - 1) {
+      timeDelta = Date.now() - input.timestamp;
+    }
+    else {
+      const nextInput = inputsToReplay[i + 1];
+      timeDelta = nextInput.timestamp - input.timestamp;
+    }
+
+    // From milliseconds to seconds
+    timeDelta /= 1000;
+
+    // Calculate new position based on input
+    const distance = timeDelta * PLAYER_SPEED;
+    if (input.up) {
+      position.y -= distance;
+    }
+    else if (input.down) {
+      position.y += distance;
+    }
+  });
+
+  // Clamp position
+  position.y = Math.max(0, position.y);
+  position.y = Math.min(COURT_HEIGHT - PLAYER_HEIGHT, position.y);
+
+  return position;
+}
 
 // Canvas
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 
 // Input
-const updateAndSendInput = ({ up, down }: { up?: boolean, down?: boolean }) => {
+const inputBuffer: Array<InputUpdate> = [];
+var lastInputSequenceNumber = 0;
+
+const handleInput = ({ up, down }: { up?: boolean, down?: boolean }) => {
   if (up !== undefined) {
     inputState.up = up;
   }
@@ -88,15 +149,31 @@ const updateAndSendInput = ({ up, down }: { up?: boolean, down?: boolean }) => {
     inputState.down = down;
   }
 
-  // Write bytes to buffer, 1 is pressed, 0 is not pressed
-  const buffer = new ArrayBuffer(2);
+  const update: InputUpdate = {
+    up: inputState.up,
+    down: inputState.down,
+    timestamp: Date.now(),
+    sequenceNumber: lastInputSequenceNumber,
+  }
+
+  // Write bytes to buffer, 1 is pressed, 0 is not pressed, with sequence number and timestamp at the end
+  const buffer = new ArrayBuffer(2 + 8 + 4);
   const view = new DataView(buffer);
-  view.setUint8(0, inputState.up ? 1 : 0);
-  view.setUint8(1, inputState.down ? 1 : 0);
+  view.setUint8(0, update.up ? 1 : 0);
+  view.setUint8(1, update.down ? 1 : 0);
+  view.setBigInt64(2, BigInt(update.timestamp), true);
+  view.setUint32(10, update.sequenceNumber, true);
 
   // Send buffer to server
-  console.log("Sent input to server.");
+  console.log("Sent input to server:", update.timestamp);
   ws.send(buffer);
+
+  lastInputSequenceNumber = (lastInputSequenceNumber + 1) % MAX_INPUT_BUFFER_SIZE;
+  inputBuffer.push(update);
+
+  if (inputBuffer.length > MAX_INPUT_BUFFER_SIZE) {
+    inputBuffer.shift();
+  }
 }
 
 window.addEventListener("keydown", (event) => {
@@ -105,10 +182,10 @@ window.addEventListener("keydown", (event) => {
   }
   switch (event.key) {
     case "ArrowUp":
-      updateAndSendInput({ up: true });
+      handleInput({ up: true });
       break;
     case "ArrowDown":
-      updateAndSendInput({ down: true });
+      handleInput({ down: true });
       break;
   }
 }, false);
@@ -116,43 +193,70 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("keyup", (event) => {
   switch (event.key) {
     case "ArrowUp":
-      updateAndSendInput({ up: false });
+      handleInput({ up: false });
       break;
     case "ArrowDown":
-      updateAndSendInput({ down: false });
+      handleInput({ down: false });
       break;
   }
 }, false);
 
 window.addEventListener("touchstart", (event) => {
   if (event.touches[0].clientY < canvas.height / 2) {
-    updateAndSendInput({ up: true });
+    handleInput({ up: true });
   } else {
-    updateAndSendInput({ down: true });
+    handleInput({ down: true });
   }
 }, false);
 
 window.addEventListener("touchend", (event) => {
-  updateAndSendInput({ up: false, down: false });
+  handleInput({ up: false, down: false });
 }, false);
 
 window.addEventListener("touchcancel", (event) => {
-  updateAndSendInput({ up: false, down: false });
+  handleInput({ up: false, down: false });
 }, false);
 
 window.addEventListener("touchmove", (event) => {
   if (event.touches[0].clientY < canvas.height / 2) {
-    updateAndSendInput({ up: true });
+    handleInput({ up: true });
   } else {
-    updateAndSendInput({ down: true });
+    handleInput({ down: true });
   }
 }, false);
 
-// Render
-const ctx = canvas.getContext("2d");
-const render = () => {
-  requestAnimationFrame(render);
+// Update and Render
 
+const ctx = canvas.getContext("2d");
+let lastTime = Date.now();
+
+const update = () => {
+  requestAnimationFrame(update);
+
+  // Update delta time
+  const time = Date.now();
+  const timeDelta = (time - lastTime) / 1000;
+  lastTime = time;
+
+  // Move player
+  const distance = timeDelta * PLAYER_SPEED;
+  let integrated = gameState.player.y;
+  if (inputState.up) {
+    integrated -= distance;
+  }
+
+  if (inputState.down) {
+    integrated += distance;
+  }
+
+  // Clamp player position
+  integrated = Math.max(0, integrated);
+  integrated = Math.min(COURT_HEIGHT - PLAYER_HEIGHT, integrated);
+
+  // Update player position
+  gameState.player.y = integrated;
+
+  // Render
   ctx.fillStyle = "#ffffff";
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (gameState?.player?.x >= 0 && gameState?.player?.y >= 0) {
@@ -186,4 +290,4 @@ const render = () => {
   }
 };
 
-render();
+requestAnimationFrame(update);
