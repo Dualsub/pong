@@ -65,17 +65,26 @@ func main() {
 	// REST endpoint for listing sessions, id and num players in json
 	http.HandleFunc("/sessions", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "[")
+		var index int = 0
 		for id := range sessions.Sessions {
 			fmt.Fprintf(w, "{")
 			fmt.Fprintf(w, "\"id\": %d", id)
 			fmt.Fprintf(w, ",")
 			fmt.Fprintf(w, "\"numPlayers\": %d", len(sessions.Sessions[id].Players))
-			fmt.Fprintf(w, "},")
+			fmt.Fprintf(w, "}")
+			if index < len(sessions.Sessions)-1 {
+				fmt.Fprintf(w, ",")
+			}
+			index++
 		}
 		fmt.Fprintf(w, "]")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.WriteHeader(http.StatusOK)
 	})
 
-	http.HandleFunc("/game", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/play", func(w http.ResponseWriter, r *http.Request) {
 
 		// Find or register session
 		id, err := strconv.Atoi(r.URL.Query().Get("id"))
@@ -144,5 +153,5 @@ func main() {
 		session.UnregisterPlayer <- player
 	})
 
-	http.ListenAndServe(":5000", nil)
+	http.ListenAndServe("0.0.0.0:5000", nil)
 }

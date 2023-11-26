@@ -20,9 +20,12 @@ const MAX_BALL_SPEED_FACTOR = 10
 const BALL_SPEED_RATE = 1.018
 const BALL_RADIUS = 10
 
-const PLAYER_SPEED = 150
+const PLAYER_SPEED = 100
 const PLAYER_WIDTH = 10
 const PLAYER_HEIGHT = 100
+
+const ATTACK_DIRECTION = math.Pi / 12
+const ATTACK_SPEED_FACTOR = 2
 
 const COURT_WIDTH = 800
 const COURT_HEIGHT = 600
@@ -62,15 +65,26 @@ type Ball struct {
 	VelocityY float32
 }
 
+// Events that happened during the frame
+type FrameEvents struct {
+	BallCollided   bool
+	BallWasSmashed bool
+	NewRound       bool
+}
+
 type GameSession struct {
-	Id               int
-	Players          map[int32]*Player
-	Ball             Ball
-	Time             time.Duration
+	Id        int
+	Players   map[int32]*Player
+	Ball      Ball
+	Time      time.Duration
+	IsRunning bool
+	Sessions  *Sessions
+	Events    FrameEvents
+
 	RegisterPlayer   chan *Player
 	UnregisterPlayer chan *Player
 	RegisterInput    chan InputUpdate
-	Sessions         *Sessions
+	PauseGame        chan time.Duration
 }
 
 func Clamp(f float32, min float32, max float32) float32 {
@@ -84,20 +98,28 @@ func Clamp(f float32, min float32, max float32) float32 {
 	return f
 }
 
+func NewBall() Ball {
+	return Ball{
+		X:         float32(COURT_WIDTH / 2),
+		Y:         float32((COURT_HEIGHT-2*BALL_RADIUS)*mathrand.Float32() + BALL_RADIUS),
+		VelocityX: BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1),
+		VelocityY: BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1),
+	}
+}
+
 func NewGameSession(id int) *GameSession {
 	return &GameSession{
-		Id:      id,
-		Players: make(map[int32]*Player),
-		Ball: Ball{
-			X:         float32(COURT_WIDTH / 2),
-			Y:         float32((COURT_HEIGHT-2*BALL_RADIUS)*mathrand.Float32() + BALL_RADIUS),
-			VelocityX: BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1),
-			VelocityY: BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1),
-		},
-		Time:             0,
+		Id:        id,
+		Players:   make(map[int32]*Player),
+		Ball:      NewBall(),
+		Time:      0,
+		IsRunning: true,
+		Events:    FrameEvents{},
+
 		RegisterPlayer:   make(chan *Player),
 		UnregisterPlayer: make(chan *Player),
 		RegisterInput:    make(chan InputUpdate),
+		PauseGame:        make(chan time.Duration),
 	}
 }
 
@@ -141,6 +163,10 @@ func (gs *GameSession) RemovePlayer(player *Player) {
 }
 
 func (gs *GameSession) AddPlayerInput(inputUpdate InputUpdate) {
+	if !gs.IsRunning {
+		return
+	}
+
 	player, ok := gs.Players[inputUpdate.PlayerId]
 	if !ok {
 		fmt.Println("Player not found")
@@ -148,6 +174,35 @@ func (gs *GameSession) AddPlayerInput(inputUpdate InputUpdate) {
 	}
 
 	player.InputStates = append(player.InputStates, inputUpdate.InputState)
+}
+
+func (gs *GameSession) ResetGame() {
+	gs.ResetRound()
+
+	for _, player := range gs.Players {
+		player.Score = 0
+	}
+}
+
+func (gs *GameSession) ResetRound() {
+	// Reset ball position
+	gs.Ball.X = float32(COURT_WIDTH / 2)
+	gs.Ball.Y = float32((COURT_HEIGHT-2*BALL_RADIUS)*mathrand.Float32() + BALL_RADIUS)
+
+	// Reset ball velocity
+	gs.Ball.VelocityX = BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1)
+	gs.Ball.VelocityY = BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1)
+
+	// Reset time
+	gs.Time = 0
+
+	// Reset player positions
+	for _, player := range gs.Players {
+		player.Y = float32(COURT_HEIGHT/2 - PLAYER_HEIGHT/2)
+		player.InputStates = make([]InputState, 0)
+	}
+
+	gs.Events.NewRound = true
 }
 
 func ReadInput(p []byte, playerId int32) InputUpdate {
@@ -176,6 +231,16 @@ func ReadInput(p []byte, playerId int32) InputUpdate {
 }
 
 func (gs *GameSession) Update(dt time.Duration) {
+
+	// Reset events
+	gs.Events.BallCollided = false
+	gs.Events.BallWasSmashed = false
+	gs.Events.NewRound = false
+
+	if !gs.IsRunning {
+		return
+	}
+
 	gs.Time += dt
 	now := time.Now()
 	// Replay all inputs, integrating player positions
@@ -232,11 +297,13 @@ func (gs *GameSession) Update(dt time.Duration) {
 	if gs.Ball.Y < BALL_RADIUS {
 		gs.Ball.Y = BALL_RADIUS
 		gs.Ball.VelocityY *= -1
+		gs.Events.BallCollided = true
 	}
 
 	if gs.Ball.Y > float32(COURT_HEIGHT-BALL_RADIUS) {
 		gs.Ball.Y = float32(COURT_HEIGHT - BALL_RADIUS)
 		gs.Ball.VelocityY *= -1
+		gs.Events.BallCollided = true
 	}
 
 	// Check for player collisions
@@ -244,6 +311,43 @@ func (gs *GameSession) Update(dt time.Duration) {
 		// Test collision with ball radius taken into account
 		if (gs.Ball.X-BALL_RADIUS < player.X+PLAYER_WIDTH) && (gs.Ball.X+BALL_RADIUS > player.X) && (gs.Ball.Y-BALL_RADIUS < player.Y+PLAYER_HEIGHT) && (gs.Ball.Y+BALL_RADIUS > player.Y) {
 			gs.Ball.VelocityX *= -1
+			gs.Events.BallCollided = true
+
+			// If ball is inside player, move it outside
+			if gs.Ball.X < player.X+PLAYER_WIDTH/2 {
+				gs.Ball.X = player.X - BALL_RADIUS
+			} else {
+				gs.Ball.X = player.X + PLAYER_WIDTH + BALL_RADIUS
+			}
+
+			// If player was moving, change ball direction
+			if len(player.InputStates) == 0 {
+				continue
+			}
+
+			lastInputState := player.InputStates[len(player.InputStates)-1]
+			if lastInputState.UpPressed == lastInputState.DownPressed {
+				continue
+			}
+
+			gs.Events.BallWasSmashed = true
+
+			speedMagnitude := math.Sqrt(float64(gs.Ball.VelocityX*gs.Ball.VelocityX+gs.Ball.VelocityY*gs.Ball.VelocityY)) * ATTACK_SPEED_FACTOR
+			var xSign float32 = 1.0
+			if gs.Ball.VelocityX < 0 {
+				xSign = -1.0
+			}
+
+			var angle float64 = 0
+
+			if lastInputState.UpPressed {
+				angle = -ATTACK_DIRECTION
+			} else {
+				angle = ATTACK_DIRECTION
+			}
+
+			gs.Ball.VelocityY = float32(speedMagnitude * math.Sin(angle))
+			gs.Ball.VelocityX = float32(speedMagnitude*math.Cos(angle)) * xSign
 		}
 	}
 
@@ -264,22 +368,8 @@ func (gs *GameSession) Update(dt time.Duration) {
 		// Increment furthest player score
 		furthestPlayer.Score++
 
-		// Reset ball position
-		gs.Ball.X = float32(COURT_WIDTH / 2)
-		gs.Ball.Y = float32((COURT_HEIGHT-2*BALL_RADIUS)*mathrand.Float32() + BALL_RADIUS)
+		gs.ResetRound()
 
-		// Reset ball velocity
-
-		gs.Ball.VelocityX = BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1)
-		gs.Ball.VelocityY = BALL_SPEED * float32(INV_SQRT_2) * float32(mathrand.Intn(2)*2-1)
-
-		// Reset time
-		gs.Time = 0
-
-		// Reset player positions
-		for _, player := range gs.Players {
-			player.Y = float32(COURT_HEIGHT/2 - PLAYER_HEIGHT/2)
-		}
 	}
 
 }
@@ -306,11 +396,38 @@ func (gs *GameSession) Broadcast() {
 		}
 	}
 
-	// Send ball position
+	// Write ball position
 	if err := binary.Write(&buffer, binary.LittleEndian, gs.Ball.X); err != nil {
 		panic(err)
 	}
 	if err := binary.Write(&buffer, binary.LittleEndian, gs.Ball.Y); err != nil {
+		panic(err)
+	}
+
+	// Write frame events
+	frameEvent := struct {
+		BallCollided   byte
+		BallWasSmashed byte
+		NewRound       byte
+	}{
+		BallCollided:   0,
+		BallWasSmashed: 0,
+		NewRound:       0,
+	}
+
+	if gs.Events.BallCollided {
+		frameEvent.BallCollided = 1
+	}
+
+	if gs.Events.BallWasSmashed {
+		frameEvent.BallWasSmashed = 1
+	}
+
+	if gs.Events.NewRound {
+		frameEvent.NewRound = 1
+	}
+
+	if err := binary.Write(&buffer, binary.LittleEndian, frameEvent); err != nil {
 		panic(err)
 	}
 
@@ -337,7 +454,14 @@ func (gs *GameSession) Broadcast() {
 
 func (gs *GameSession) Run() {
 	tick := time.NewTicker(SESSION_DELTA_TIME)
+	pauseTimer := time.NewTimer(0)
+	pauseTimer.Stop()
+
 	defer tick.Stop()
+	defer pauseTimer.Stop()
+
+	// Game session is paused until both players are ready
+	gs.IsRunning = false
 
 	fmt.Println("Running session:", gs.Id)
 
@@ -345,11 +469,25 @@ func (gs *GameSession) Run() {
 		select {
 		case player := <-gs.RegisterPlayer:
 			gs.AddPlayer(player)
+
+			// Start session if full
+			if len(gs.Players) == MAX_PLAYERS {
+				gs.ResetGame()
+				gs.IsRunning = true
+			} else {
+				gs.IsRunning = false
+				gs.ResetRound()
+			}
 		case player := <-gs.UnregisterPlayer:
 			gs.RemovePlayer(player)
 			if len(gs.Players) == 0 {
 				gs.Sessions.Unregister <- gs
 				return
+			}
+
+			if len(gs.Players) < MAX_PLAYERS {
+				gs.IsRunning = false
+				gs.ResetRound()
 			}
 		case inputUpdate := <-gs.RegisterInput:
 			gs.AddPlayerInput(inputUpdate)
