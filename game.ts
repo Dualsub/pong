@@ -107,7 +107,7 @@ if (!gameId) {
 
 
 // Websocket
-const ws = new WebSocket("wss://165.22.204.103:8080/play?id=" + gameId);
+const ws = new WebSocket("wss://www.kurskollen.se/play?id=" + gameId);
 ws.binaryType = "arraybuffer";
 
 // Connection opened
