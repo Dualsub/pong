@@ -1,4 +1,4 @@
 export interface Session {
-    id: string
+    id: number
     numPlayers: number
 }

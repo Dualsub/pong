@@ -55,22 +55,33 @@ const SOUNDS = {
 
 // Resources
 const playableSounds = Object.fromEntries(Object.entries(SOUNDS).map(([sound, settings]) => {
-    const audio = document.getElementById(sound) as HTMLAudioElement;
-    if (audio !== null) {
-        audio.load();
-        audio.loop = false;
-        audio.volume = 0.5;
-        audio.playbackRate = settings.playrate;
+    try {
+        const audio = document.getElementById(sound) as HTMLAudioElement;
+        if (audio !== null) {
+            audio.load();
+            audio.loop = false;
+            audio.volume = 0.5;
+            audio.playbackRate = settings.playrate;
+        }
+
+        return [sound, audio];
+    } catch (error) {
+        return [sound, null];
     }
-    return [sound, audio];
+
 }).filter(([, audio]) => audio !== null) as Array<[string, HTMLAudioElement]>);
 
 const playSound = (sound: string) => {
     const audio = playableSounds[sound];
-    if (audio === undefined) {
+    if (audio === undefined || audio === null) {
         return;
     }
-    audio.play();
+
+    try {
+        audio.play();
+    } catch (error) {
+        alert("Could not play sound.");
+    }
 }
 
 // State
@@ -94,8 +105,9 @@ if (!gameId) {
     throw new Error("No game id in url.");
 }
 
+
 // Websocket
-const ws = new WebSocket("ws://192.168.1.25:5000/play?id=" + gameId);
+const ws = new WebSocket(process.env.GAME_SERVER_WS_URL + "?id=" + gameId);
 ws.binaryType = "arraybuffer";
 
 // Connection opened
@@ -172,6 +184,7 @@ ws.addEventListener("message", (event) => {
 
 // Find the last acknowledged input, remove all inputs before that, and replay all inputs after that to get the current position
 const getPlayerPosition = (serverX: number, serverY: number, sequenceNumber: number) => {
+
     const lastAcknowledgedInputIndex = inputBuffer.findIndex((input) => input.sequenceNumber === sequenceNumber);
     const lastAcknowledgedInput = inputBuffer[lastAcknowledgedInputIndex];
     if (!lastAcknowledgedInput) {
