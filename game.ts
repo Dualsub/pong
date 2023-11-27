@@ -40,16 +40,16 @@ const COURT_HEIGHT = 600
 const MAX_INPUT_BUFFER_SIZE = 10;
 const SOUNDS = {
     hit: {
-        playrate: 1.5,
+        playbackRate: 1.5,
     },
     smash: {
-        playrate: 1.0,
+        playbackRate: 1.0,
     },
     win: {
-        playrate: 1.5,
+        playbackRate: 1.5,
     },
     lose: {
-        playrate: 1.5,
+        playbackRate: 1.5,
     },
 };
 
@@ -61,7 +61,7 @@ const playableSounds = Object.fromEntries(Object.entries(SOUNDS).map(([sound, se
             audio.load();
             audio.loop = false;
             audio.volume = 0.5;
-            audio.playbackRate = settings.playrate;
+            audio.playbackRate = settings.playbackRate;
         }
 
         return [sound, audio];
@@ -105,8 +105,9 @@ if (!gameId) {
     throw new Error("No game id in url.");
 }
 
+
 // Websocket
-const ws = new WebSocket("ws://192.168.1.25:5000/play?id=" + gameId);
+const ws = new WebSocket("ws://165.22.204.103:8080/play?id=" + gameId);
 ws.binaryType = "arraybuffer";
 
 // Connection opened
