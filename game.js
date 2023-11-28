@@ -68,7 +68,7 @@ var playSound = function (sound) {
 };
 // State
 var gameState = {
-    ball: { x: COURT_WIDTH / 2, y: COURT_HEIGHT / 2, isSmahed: false },
+    ball: { x: COURT_WIDTH / 2, y: COURT_HEIGHT / 2, isSmashed: false },
     player: { x: 0, y: 0, id: 0, score: 0 },
     opponent: { x: 0, y: 0, id: 0, score: 0 },
 };
@@ -84,7 +84,7 @@ if (!gameId) {
     throw new Error("No game id in url.");
 }
 // Websocket
-var ws = new WebSocket("wss://www.kurskollen.se/play?id=" + gameId);
+var ws = new WebSocket("ws://100.121.227.233:5623/play?id=" + gameId);
 ws.binaryType = "arraybuffer";
 // Connection opened
 ws.addEventListener("open", function (event) {
@@ -116,7 +116,7 @@ ws.addEventListener("message", function (event) {
     };
     // Flags
     var ballCollided = view.getUint8(8 + numPlayers * 16 + 8) === 1;
-    var ballWasSmahed = view.getUint8(8 + numPlayers * 16 + 9) === 1;
+    var ballWasSmashed = view.getUint8(8 + numPlayers * 16 + 9) === 1;
     var newRound = view.getUint8(8 + numPlayers * 16 + 10) === 1;
     // Get previous score
     var lastPlayerScore = gameState.player.score;
@@ -127,10 +127,10 @@ ws.addEventListener("message", function (event) {
     gameState.ball = __assign(__assign({}, gameState.ball), ball);
     var playerScored = gameState.player.score > lastPlayerScore;
     // Fire events based on flags
-    if (ballCollided && !ballWasSmahed) {
+    if (ballCollided && !ballWasSmashed) {
         playSound("hit");
     }
-    else if (ballWasSmahed) {
+    else if (ballWasSmashed) {
         playSound("smash");
     }
     if (newRound) {
@@ -141,15 +141,16 @@ ws.addEventListener("message", function (event) {
             playSound("lose");
         }
     }
-    if (ballWasSmahed) {
-        gameState.ball.isSmahed = true;
+    if (ballWasSmashed) {
+        gameState.ball.isSmashed = true;
     }
     else if (newRound) {
-        gameState.ball.isSmahed = false;
+        gameState.ball.isSmashed = false;
     }
 });
 // Find the last acknowledged input, remove all inputs before that, and replay all inputs after that to get the current position
 var getPlayerPosition = function (serverX, serverY, sequenceNumber) {
+    return { x: serverX, y: serverY };
     var lastAcknowledgedInputIndex = inputBuffer.findIndex(function (input) { return input.sequenceNumber === sequenceNumber; });
     var lastAcknowledgedInput = inputBuffer[lastAcknowledgedInputIndex];
     if (!lastAcknowledgedInput) {
@@ -327,7 +328,7 @@ var render = function () {
         ctx.fillRect(gameState.opponent.x, gameState.opponent.y, PLAYER_WIDTH, PLAYER_HEIGHT);
     }
     if (((_e = gameState === null || gameState === void 0 ? void 0 : gameState.ball) === null || _e === void 0 ? void 0 : _e.x) >= 0 && ((_f = gameState === null || gameState === void 0 ? void 0 : gameState.ball) === null || _f === void 0 ? void 0 : _f.y) >= 0) {
-        if (gameState.ball.isSmahed) {
+        if (gameState.ball.isSmashed) {
             var currentTime = Date.now();
             var sineValue = Math.sin(currentTime / 100);
             var cosineValue = Math.cos(currentTime / 100);

@@ -6,7 +6,7 @@ interface Object {
 }
 
 type Player = Object & { id: number, score: number };
-type Ball = Object & { isSmahed: boolean };
+type Ball = Object & { isSmashed: boolean };
 
 interface GameState {
     ball: Ball;
@@ -86,7 +86,7 @@ const playSound = (sound: string) => {
 
 // State
 const gameState: GameState = {
-    ball: { x: COURT_WIDTH / 2, y: COURT_HEIGHT / 2, isSmahed: false },
+    ball: { x: COURT_WIDTH / 2, y: COURT_HEIGHT / 2, isSmashed: false },
     player: { x: 0, y: 0, id: 0, score: 0 },
     opponent: { x: 0, y: 0, id: 0, score: 0 },
 };
@@ -107,7 +107,7 @@ if (!gameId) {
 
 
 // Websocket
-const ws = new WebSocket("wss://www.kurskollen.se/play?id=" + gameId);
+const ws = new WebSocket("ws://100.121.227.233:5623/play?id=" + gameId);
 ws.binaryType = "arraybuffer";
 
 // Connection opened
@@ -146,7 +146,7 @@ ws.addEventListener("message", (event) => {
 
     // Flags
     const ballCollided = view.getUint8(8 + numPlayers * 16 + 8) === 1;
-    const ballWasSmahed = view.getUint8(8 + numPlayers * 16 + 9) === 1;
+    const ballWasSmashed = view.getUint8(8 + numPlayers * 16 + 9) === 1;
     const newRound = view.getUint8(8 + numPlayers * 16 + 10) === 1;
 
     // Get previous score
@@ -161,9 +161,9 @@ ws.addEventListener("message", (event) => {
     const playerScored = gameState.player.score > lastPlayerScore;
 
     // Fire events based on flags
-    if (ballCollided && !ballWasSmahed) {
+    if (ballCollided && !ballWasSmashed) {
         playSound("hit");
-    } else if (ballWasSmahed) {
+    } else if (ballWasSmashed) {
         playSound("smash");
     }
 
@@ -175,15 +175,17 @@ ws.addEventListener("message", (event) => {
         }
     }
 
-    if (ballWasSmahed) {
-        gameState.ball.isSmahed = true;
+    if (ballWasSmashed) {
+        gameState.ball.isSmashed = true;
     } else if (newRound) {
-        gameState.ball.isSmahed = false;
+        gameState.ball.isSmashed = false;
     }
 });
 
 // Find the last acknowledged input, remove all inputs before that, and replay all inputs after that to get the current position
 const getPlayerPosition = (serverX: number, serverY: number, sequenceNumber: number) => {
+
+    return { x: serverX, y: serverY };
 
     const lastAcknowledgedInputIndex = inputBuffer.findIndex((input) => input.sequenceNumber === sequenceNumber);
     const lastAcknowledgedInput = inputBuffer[lastAcknowledgedInputIndex];
@@ -397,7 +399,7 @@ const render = () => {
     }
 
     if (gameState?.ball?.x >= 0 && gameState?.ball?.y >= 0) {
-        if (gameState.ball.isSmahed) {
+        if (gameState.ball.isSmashed) {
             const currentTime = Date.now();
             const sineValue = Math.sin(currentTime / 100);
             const cosineValue = Math.cos(currentTime / 100);
