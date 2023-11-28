@@ -84,7 +84,7 @@ if (!gameId) {
     throw new Error("No game id in url.");
 }
 // Websocket
-var ws = new WebSocket("ws://100.121.227.233:5623/play?id=" + gameId);
+var ws = new WebSocket("wss://www.kurskollen.se/play?id=" + gameId);
 ws.binaryType = "arraybuffer";
 // Connection opened
 ws.addEventListener("open", function (event) {
