@@ -87,6 +87,37 @@ type GameSession struct {
 	PauseGame        chan time.Duration
 }
 
+type Sessions struct {
+	Sessions      map[int]*GameSession
+	Register      chan *GameSession
+	Unregister    chan *GameSession
+	RegisterInput chan InputUpdate
+}
+
+func NewSessions() *Sessions {
+	return &Sessions{
+		Sessions:      make(map[int]*GameSession),
+		Register:      make(chan *GameSession),
+		Unregister:    make(chan *GameSession),
+		RegisterInput: make(chan InputUpdate),
+	}
+}
+
+func (sessions *Sessions) Run() {
+	for {
+		select {
+		case session := <-sessions.Register:
+			sessions.Sessions[session.Id] = session
+			session.Sessions = sessions
+			fmt.Println("Registered session", session.Id)
+			go session.Run()
+		case session := <-sessions.Unregister:
+			delete(sessions.Sessions, session.Id)
+			fmt.Println("Unregistered session", session.Id)
+		}
+	}
+}
+
 func Clamp(f float32, min float32, max float32) float32 {
 	if f < min {
 		return min
@@ -218,6 +249,10 @@ func ReadInput(p []byte, playerId int32) InputUpdate {
 	}
 
 	timestamp := time.Unix(0, rawInputState.Timestamp*int64(time.Millisecond))
+	// Get server timestamp, if it's in the future, use it instead
+	if timestamp.After(time.Now()) {
+		timestamp = time.Now()
+	}
 
 	return InputUpdate{
 		PlayerId: playerId,
