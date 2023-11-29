@@ -6,7 +6,7 @@ interface Object {
 }
 
 type Player = Object & { id: number, score: number };
-type Ball = Object & { isSmahed: boolean };
+type Ball = Object & { isSmashed: boolean };
 
 interface GameState {
     ball: Ball;
@@ -40,16 +40,16 @@ const COURT_HEIGHT = 600
 const MAX_INPUT_BUFFER_SIZE = 10;
 const SOUNDS = {
     hit: {
-        playrate: 1.5,
+        playbackRate: 1.5,
     },
     smash: {
-        playrate: 1.0,
+        playbackRate: 1.0,
     },
     win: {
-        playrate: 1.5,
+        playbackRate: 1.5,
     },
     lose: {
-        playrate: 1.5,
+        playbackRate: 1.5,
     },
 };
 
@@ -61,7 +61,7 @@ const playableSounds = Object.fromEntries(Object.entries(SOUNDS).map(([sound, se
             audio.load();
             audio.loop = false;
             audio.volume = 0.5;
-            audio.playbackRate = settings.playrate;
+            audio.playbackRate = settings.playbackRate;
         }
 
         return [sound, audio];
@@ -86,7 +86,7 @@ const playSound = (sound: string) => {
 
 // State
 const gameState: GameState = {
-    ball: { x: COURT_WIDTH / 2, y: COURT_HEIGHT / 2, isSmahed: false },
+    ball: { x: COURT_WIDTH / 2, y: COURT_HEIGHT / 2, isSmashed: false },
     player: { x: 0, y: 0, id: 0, score: 0 },
     opponent: { x: 0, y: 0, id: 0, score: 0 },
 };
@@ -107,7 +107,7 @@ if (!gameId) {
 
 
 // Websocket
-const ws = new WebSocket(process.env.GAME_SERVER_WS_URL + "?id=" + gameId);
+const ws = new WebSocket("wss://www.kurskollen.se/play?id=" + gameId);
 ws.binaryType = "arraybuffer";
 
 // Connection opened
@@ -146,7 +146,7 @@ ws.addEventListener("message", (event) => {
 
     // Flags
     const ballCollided = view.getUint8(8 + numPlayers * 16 + 8) === 1;
-    const ballWasSmahed = view.getUint8(8 + numPlayers * 16 + 9) === 1;
+    const ballWasSmashed = view.getUint8(8 + numPlayers * 16 + 9) === 1;
     const newRound = view.getUint8(8 + numPlayers * 16 + 10) === 1;
 
     // Get previous score
@@ -161,9 +161,9 @@ ws.addEventListener("message", (event) => {
     const playerScored = gameState.player.score > lastPlayerScore;
 
     // Fire events based on flags
-    if (ballCollided && !ballWasSmahed) {
+    if (ballCollided && !ballWasSmashed) {
         playSound("hit");
-    } else if (ballWasSmahed) {
+    } else if (ballWasSmashed) {
         playSound("smash");
     }
 
@@ -175,10 +175,10 @@ ws.addEventListener("message", (event) => {
         }
     }
 
-    if (ballWasSmahed) {
-        gameState.ball.isSmahed = true;
+    if (ballWasSmashed) {
+        gameState.ball.isSmashed = true;
     } else if (newRound) {
-        gameState.ball.isSmahed = false;
+        gameState.ball.isSmashed = false;
     }
 });
 
@@ -205,7 +205,6 @@ const getPlayerPosition = (serverX: number, serverY: number, sequenceNumber: num
             timeDelta = nextInput.timestamp - input.timestamp;
         }
 
-        // From milliseconds to seconds
         timeDelta /= 1000;
 
         // Calculate new position based on input
@@ -248,7 +247,7 @@ const handleInput = ({ up, down }: { up?: boolean, down?: boolean }) => {
         sequenceNumber: lastInputSequenceNumber,
     }
 
-    // Write bytes to buffer, 1 is pressed, 0 is not pressed, with sequence number and timestamp at the end
+    // Write input to buffer
     const buffer = new ArrayBuffer(2 + 8 + 4);
     const view = new DataView(buffer);
     view.setUint8(0, update.up ? 1 : 0);
@@ -397,7 +396,7 @@ const render = () => {
     }
 
     if (gameState?.ball?.x >= 0 && gameState?.ball?.y >= 0) {
-        if (gameState.ball.isSmahed) {
+        if (gameState.ball.isSmashed) {
             const currentTime = Date.now();
             const sineValue = Math.sin(currentTime / 100);
             const cosineValue = Math.cos(currentTime / 100);

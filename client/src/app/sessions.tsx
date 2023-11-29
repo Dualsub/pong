@@ -4,11 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import { Session } from "./types";
 
 const Sessions = () => {
-  const [sessions, setSessions] = useState<Session[]>([{ id: 1, numPlayers: 1 }]);
+  const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("http://localhost:5000/sessions", { mode: "cors" })
+    fetch("https://www.kurskollen.se/sessions")
       .then((res) => {
         if (res.ok) {
           return res.json();
@@ -16,11 +16,11 @@ const Sessions = () => {
         console.log(res);
         throw new Error("Failed to fetch sessions");
       })
+      .catch(() => [])
       .then((data) => {
         setSessions(data);
         setLoading(false);
       }).catch((err) => {
-        console.error(err);
         setLoading(false);
       });
   }, []);
@@ -36,14 +36,27 @@ const Sessions = () => {
 
     return <>
       <h1 className="font-extrabold text-2xl mb-2 flex justify-center">Sessions</h1>
-      {/* Nice table using grid, rounded with borders */}
-      <div className="grid grid-cols-3 gap-4">
-        {sessions.map((session) => (
-          <a href={`/game?id=${session.id}`} key={session.id} className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full flex-1 mx-auto block mb-10">
-            {session.numPlayers} player{session.numPlayers > 1 ? "s" : ""}
-          </a>
-        ))}
-      </div>
+      {/* Nice table, with id, number of players (out of 2), and a join button(disabled if full)*/}
+      <table className="table-auto mx-auto">
+        <thead>
+          <tr>
+            <th className="px-4 py-2">ID</th>
+            <th className="px-4 py-2">Players</th>
+            <th className="px-4 py-2">Join</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sessions.map((session) => (
+            <tr key={session.id}>
+              <td className="border-none px-4 py-2">{session.id}</td>
+              <td className="border-b px-4 py-2">{session.numPlayers}/2</td>
+              <td className="border-b px-4 py-2">
+                <button className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full" disabled={session.numPlayers >= 2}>Join</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </>
   }, [sessions, loading]);
 
