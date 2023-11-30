@@ -109,16 +109,12 @@ loop:
 	session.UnregisterPlayer <- player
 }
 
+const production = false
+
 func main() {
 
 	sessions := NewSessions()
 	go sessions.Run()
-
-	certManager := &autocert.Manager{
-		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist(domains...),
-		Cache:      autocert.DirCache("certs"),
-	}
 
 	http.HandleFunc("/sessions", func(w http.ResponseWriter, r *http.Request) {
 		handleSessions(sessions, w, r)
@@ -128,24 +124,42 @@ func main() {
 		handlePlay(sessions, w, r)
 	})
 
-	server := &http.Server{
-		Addr: ":443",
-		TLSConfig: &tls.Config{
-			GetCertificate: certManager.GetCertificate,
-			MinVersion:     tls.VersionTLS12,
-		},
-	}
+	if production {
 
-	go func() {
-		err := http.ListenAndServe(":80", certManager.HTTPHandler(nil))
-		if err != nil {
-			fmt.Printf("HTTP server error: %s\n", err)
+		certManager := &autocert.Manager{
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(domains...),
+			Cache:      autocert.DirCache("certs"),
 		}
-	}()
 
-	fmt.Println("Server listening on :80 for HTTP challenges and :443 for HTTPS")
-	err := server.ListenAndServeTLS("", "")
-	if err != nil {
-		fmt.Printf("Server error: %s\n", err)
+		server := &http.Server{
+			Addr: ":443",
+			TLSConfig: &tls.Config{
+				GetCertificate: certManager.GetCertificate,
+				MinVersion:     tls.VersionTLS12,
+			},
+		}
+
+		go func() {
+			err := http.ListenAndServe(":80", certManager.HTTPHandler(nil))
+			if err != nil {
+				fmt.Printf("HTTP server error: %s\n", err)
+			}
+		}()
+
+		fmt.Println("Server listening on :80 for HTTP challenges and :443 for HTTPS")
+		err := server.ListenAndServeTLS("", "")
+		if err != nil {
+			fmt.Printf("Server error: %s\n", err)
+		}
+
+	} else {
+
+		fmt.Println("Server listening on :8080")
+		err := http.ListenAndServe(":8080", nil)
+		if err != nil {
+			fmt.Printf("Server error: %s\n", err)
+		}
+
 	}
 }
