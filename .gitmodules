@@ -1,0 +1,3 @@
+[submodule "client-wgpu/game"]
+	path = client-wgpu/game
+	url = https://github.com/Dualsub/pong-webgpu.git
