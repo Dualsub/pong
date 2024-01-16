@@ -1,0 +1,35 @@
+{
+  "name": "client",
+  "version": "0.1.0",
+  "homepage": "https://dualsub.github.io/go-mp",
+  "private": true,
+  "scripts": {
+    "predeploy": "npm run build && touch ./out/.nojekyll",
+    "deploy": "gh-pages -d out -t true",
+    "predev": "npm run game",
+    "dev": "next dev",
+    "prebuild": "rm -rf out && npm run game",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "serve-build": "serve -s out",
+    "game": "cp ../game/build-web/pong.wasm ./public/pong.wasm && cp ../game/build-web/pong.js ./public/pong.js"
+  },
+  "dependencies": {
+    "next": "14.0.4",
+    "react": "^18",
+    "react-dom": "^18"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "autoprefixer": "^10.0.1",
+    "eslint": "^8",
+    "eslint-config-next": "14.0.4",
+    "gh-pages": "^6.1.1",
+    "postcss": "^8",
+    "tailwindcss": "^3.3.0",
+    "typescript": "^5"
+  }
+}
