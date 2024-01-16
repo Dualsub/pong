@@ -32,6 +32,10 @@ const COURT_HEIGHT = 600
 
 const MAX_PLAYERS = 2
 
+const GAME_SCORE_LIMIT = 2
+const ROUND_RESET_TIME = 0 * time.Second
+const GAME_RESET_TIME = 0 * time.Second
+
 // Save some calculations :)
 const INV_SQRT_2 = 1.0 / math.Sqrt2
 
@@ -47,9 +51,17 @@ type InputUpdate struct {
 	InputState InputState
 }
 
+type Controller interface {
+	OnUpdate(dt float32, playerId int32, session *GameSession)
+}
+
+type PlayerController struct {
+	Connection *websocket.Conn
+}
+
 type Player struct {
 	Id          int32
-	Connection  *websocket.Conn
+	Controller  Controller
 	Score       int32
 	X           float32
 	Y           float32
@@ -68,8 +80,14 @@ type Ball struct {
 // Events that happened during the frame
 type FrameEvents struct {
 	BallCollided   bool
+	BallHitPlayer  bool
 	BallWasSmashed bool
 	NewRound       bool
+}
+
+type Countdown struct {
+	Countdown int32
+	// Maybe add type later
 }
 
 type GameSession struct {
@@ -79,12 +97,16 @@ type GameSession struct {
 	Time      time.Duration
 	IsRunning bool
 	Sessions  *Sessions
+	Countdown Countdown
 	Events    FrameEvents
+
+	StateBuffer bytes.Buffer
 
 	RegisterPlayer   chan *Player
 	UnregisterPlayer chan *Player
 	RegisterInput    chan InputUpdate
-	PauseGame        chan time.Duration
+
+	PauseTimer *time.Timer
 }
 
 type Sessions struct {
@@ -147,17 +169,23 @@ func NewGameSession(id int) *GameSession {
 		IsRunning: true,
 		Events:    FrameEvents{},
 
-		RegisterPlayer:   make(chan *Player),
-		UnregisterPlayer: make(chan *Player),
-		RegisterInput:    make(chan InputUpdate),
-		PauseGame:        make(chan time.Duration),
+		RegisterPlayer:   make(chan *Player, 1),
+		UnregisterPlayer: make(chan *Player, 1),
+		RegisterInput:    make(chan InputUpdate, 1),
+
+		PauseTimer: time.NewTimer(0),
 	}
+
 }
 
 func (gs *GameSession) AddPlayer(player *Player) {
+	_, isBot := player.Controller.(*BotController)
+
 	// Check if session is full
 	if len(gs.Players) >= MAX_PLAYERS {
-		player.Ready <- false
+		if !isBot {
+			player.Ready <- false
+		}
 		return
 	}
 
@@ -183,7 +211,9 @@ func (gs *GameSession) AddPlayer(player *Player) {
 
 	// Add player to session
 	gs.Players[player.Id] = player
-	player.Ready <- true
+	if !isBot {
+		player.Ready <- true
+	}
 
 	fmt.Println("Player added")
 }
@@ -207,7 +237,13 @@ func (gs *GameSession) AddPlayerInput(inputUpdate InputUpdate) {
 	player.InputStates = append(player.InputStates, inputUpdate.InputState)
 }
 
+func (gs *GameSession) EndGame() {
+
+	gs.ResetGame()
+}
+
 func (gs *GameSession) ResetGame() {
+
 	gs.ResetRound()
 
 	for _, player := range gs.Players {
@@ -236,8 +272,13 @@ func (gs *GameSession) ResetRound() {
 	gs.Events.NewRound = true
 }
 
+func (gs *GameSession) PauseGame(duration time.Duration) {
+	gs.IsRunning = false
+	gs.PauseTimer.Reset(duration)
+}
+
 func ReadInput(p []byte, playerId int32) InputUpdate {
-	var rawInputState struct { // 2 bytes
+	var rawInputState struct {
 		UpPressed   byte
 		DownPressed byte
 		Timestamp   int64 // Retrieved on client side using Date.now()
@@ -250,7 +291,7 @@ func ReadInput(p []byte, playerId int32) InputUpdate {
 
 	timestamp := time.Unix(0, rawInputState.Timestamp*int64(time.Millisecond))
 	// Get server timestamp, if it's in the future, use it instead
-	if timestamp.After(time.Now()) {
+	if timestamp.After(time.Now()) || timestamp.Before(time.Now().Add(-1*time.Second)) {
 		timestamp = time.Now()
 	}
 
@@ -265,10 +306,51 @@ func ReadInput(p []byte, playerId int32) InputUpdate {
 	}
 }
 
+// Function to check if two line segments intersect
+func intersects(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2 float32) bool {
+	// Calculate vectors & determinants
+	dax := ax2 - ax1
+	day := ay2 - ay1
+	dbx := bx2 - bx1
+	dby := by2 - by1
+	det := dax*dby - dbx*day
+
+	if det == 0 {
+		return false // lines are parallel
+	}
+
+	s := (1 / det) * ((ax1-bx1)*dby - (ay1-by1)*dbx)
+	t := (1 / det) * ((bx1-ax1)*day - (by1-ay1)*dax)
+
+	return s >= 0 && s <= 1 && t >= 0 && t <= 1
+}
+
+func IsColliding(oldBall *Ball, ball *Ball, player *Player) bool {
+
+	// Check for direct collision with current and previous state
+	directCollision := (ball.X-BALL_RADIUS < player.X+PLAYER_WIDTH) && (ball.X+BALL_RADIUS > player.X) && (ball.Y-BALL_RADIUS < player.Y+PLAYER_HEIGHT) && (ball.Y+BALL_RADIUS > player.Y)
+
+	// Define player's bounding box edges
+	// leftEdge := player.X
+	// rightEdge := player.X + PLAYER_WIDTH
+	// topEdge := player.Y
+	// bottomEdge := player.Y + PLAYER_HEIGHT
+
+	// Check for intersection with each edge of the player's bounding box
+	// hitLeft := intersects(oldBall.X, oldBall.Y, ball.X, ball.Y, leftEdge, topEdge, leftEdge, bottomEdge)
+	// hitRight := intersects(oldBall.X, oldBall.Y, ball.X, ball.Y, rightEdge, topEdge, rightEdge, bottomEdge)
+	// hitTop := intersects(oldBall.X, oldBall.Y, ball.X, ball.Y, leftEdge, topEdge, rightEdge, topEdge)
+	// hitBottom := intersects(oldBall.X, oldBall.Y, ball.X, ball.Y, leftEdge, bottomEdge, rightEdge, bottomEdge)
+
+	// Return true if any collision is detected
+	return directCollision
+}
+
 func (gs *GameSession) Update(dt time.Duration) {
 
 	// Reset events
 	gs.Events.BallCollided = false
+	gs.Events.BallHitPlayer = false
 	gs.Events.BallWasSmashed = false
 	gs.Events.NewRound = false
 
@@ -319,6 +401,9 @@ func (gs *GameSession) Update(dt time.Duration) {
 		}
 	}
 
+	// Cache old ball state
+	oldBall := gs.Ball
+
 	// Update ball position
 	velocityScale := float32(math.Pow(BALL_SPEED_RATE, float64(gs.Time.Seconds())))
 	if velocityScale > MAX_BALL_SPEED_FACTOR {
@@ -344,46 +429,50 @@ func (gs *GameSession) Update(dt time.Duration) {
 	// Check for player collisions
 	for _, player := range gs.Players {
 		// Test collision with ball radius taken into account
-		if (gs.Ball.X-BALL_RADIUS < player.X+PLAYER_WIDTH) && (gs.Ball.X+BALL_RADIUS > player.X) && (gs.Ball.Y-BALL_RADIUS < player.Y+PLAYER_HEIGHT) && (gs.Ball.Y+BALL_RADIUS > player.Y) {
-			gs.Ball.VelocityX *= -1
-			gs.Events.BallCollided = true
-
-			// If ball is inside player, move it outside
-			if gs.Ball.X < player.X+PLAYER_WIDTH/2 {
-				gs.Ball.X = player.X - BALL_RADIUS
-			} else {
-				gs.Ball.X = player.X + PLAYER_WIDTH + BALL_RADIUS
-			}
-
-			// If player was moving, change ball direction
-			if len(player.InputStates) == 0 {
-				continue
-			}
-
-			lastInputState := player.InputStates[len(player.InputStates)-1]
-			if lastInputState.UpPressed == lastInputState.DownPressed {
-				continue
-			}
-
-			gs.Events.BallWasSmashed = true
-
-			speedMagnitude := math.Sqrt(float64(gs.Ball.VelocityX*gs.Ball.VelocityX+gs.Ball.VelocityY*gs.Ball.VelocityY)) * ATTACK_SPEED_FACTOR
-			var xSign float32 = 1.0
-			if gs.Ball.VelocityX < 0 {
-				xSign = -1.0
-			}
-
-			var angle float64 = 0
-
-			if lastInputState.UpPressed {
-				angle = -ATTACK_DIRECTION
-			} else {
-				angle = ATTACK_DIRECTION
-			}
-
-			gs.Ball.VelocityY = float32(speedMagnitude * math.Sin(angle))
-			gs.Ball.VelocityX = float32(speedMagnitude*math.Cos(angle)) * xSign
+		if !IsColliding(&oldBall, &gs.Ball, player) {
+			continue
 		}
+
+		gs.Ball.VelocityX *= -1
+		gs.Events.BallCollided = true
+		gs.Events.BallHitPlayer = true
+
+		// Move ball outside player
+		if gs.Ball.X > COURT_WIDTH/2 {
+			gs.Ball.X = player.X - BALL_RADIUS
+		} else {
+			gs.Ball.X = player.X + PLAYER_WIDTH + BALL_RADIUS
+		}
+
+		// If player was moving, change ball direction
+		if len(player.InputStates) == 0 {
+			continue
+		}
+
+		lastInputState := player.InputStates[len(player.InputStates)-1]
+		if lastInputState.UpPressed == lastInputState.DownPressed {
+			continue
+		}
+
+		gs.Events.BallWasSmashed = true
+
+		speedMagnitude := math.Sqrt(float64(gs.Ball.VelocityX*gs.Ball.VelocityX+gs.Ball.VelocityY*gs.Ball.VelocityY)) * ATTACK_SPEED_FACTOR
+		var xSign float32 = 1.0
+		if gs.Ball.VelocityX < 0 {
+			xSign = -1.0
+		}
+
+		var angle float64 = 0
+
+		if lastInputState.UpPressed {
+			angle = -ATTACK_DIRECTION
+		} else {
+			angle = ATTACK_DIRECTION
+		}
+
+		gs.Ball.VelocityY = float32(speedMagnitude * math.Sin(angle))
+		gs.Ball.VelocityX = float32(speedMagnitude*math.Cos(angle)) * xSign
+
 	}
 
 	// Check if ball is out of bounds, then which player is furthest away
@@ -403,10 +492,41 @@ func (gs *GameSession) Update(dt time.Duration) {
 		// Increment furthest player score
 		furthestPlayer.Score++
 
-		gs.ResetRound()
-
+		// Check if game is over
+		if furthestPlayer.Score >= GAME_SCORE_LIMIT {
+			gs.EndGame()
+		} else {
+			gs.ResetRound()
+		}
 	}
 
+}
+
+func NewPlayerController(conn *websocket.Conn) *PlayerController {
+	return &PlayerController{
+		Connection: conn,
+	}
+}
+
+func (pc *PlayerController) OnUpdate(dt float32, playerId int32, session *GameSession) {
+	var playerBuffer bytes.Buffer
+	if err := binary.Write(&playerBuffer, binary.LittleEndian, playerId); err != nil {
+		panic(err)
+	}
+
+	player := session.Players[playerId]
+
+	var lastSequence uint32 = 0
+	if len(player.InputStates) > 0 {
+		lastSequence = player.InputStates[len(player.InputStates)-1].Sequence
+	}
+
+	if err := binary.Write(&playerBuffer, binary.LittleEndian, lastSequence); err != nil {
+		panic(err)
+	}
+
+	playerBuffer.Write(session.StateBuffer.Bytes())
+	pc.Connection.WriteMessage(websocket.BinaryMessage, playerBuffer.Bytes())
 }
 
 func (gs *GameSession) Broadcast() {
@@ -431,17 +551,15 @@ func (gs *GameSession) Broadcast() {
 		}
 	}
 
-	// Write ball position
-	if err := binary.Write(&buffer, binary.LittleEndian, gs.Ball.X); err != nil {
-		panic(err)
-	}
-	if err := binary.Write(&buffer, binary.LittleEndian, gs.Ball.Y); err != nil {
+	// Write ball position and velocity
+	if err := binary.Write(&buffer, binary.LittleEndian, gs.Ball); err != nil {
 		panic(err)
 	}
 
 	// Write frame events
 	frameEvent := struct {
 		BallCollided   byte
+		BallHitPlayer  byte
 		BallWasSmashed byte
 		NewRound       byte
 	}{
@@ -452,6 +570,10 @@ func (gs *GameSession) Broadcast() {
 
 	if gs.Events.BallCollided {
 		frameEvent.BallCollided = 1
+	}
+
+	if gs.Events.BallHitPlayer {
+		frameEvent.BallHitPlayer = 1
 	}
 
 	if gs.Events.BallWasSmashed {
@@ -466,34 +588,19 @@ func (gs *GameSession) Broadcast() {
 		panic(err)
 	}
 
+	gs.StateBuffer = buffer
+
 	for _, player := range gs.Players {
-		// Prepend player id to message and send
-		var playerBuffer bytes.Buffer
-		if err := binary.Write(&playerBuffer, binary.LittleEndian, player.Id); err != nil {
-			panic(err)
-		}
-
-		var lastSequence uint32 = 0
-		if len(player.InputStates) > 0 {
-			lastSequence = player.InputStates[len(player.InputStates)-1].Sequence
-		}
-
-		if err := binary.Write(&playerBuffer, binary.LittleEndian, lastSequence); err != nil {
-			panic(err)
-		}
-
-		playerBuffer.Write(buffer.Bytes())
-		player.Connection.WriteMessage(websocket.BinaryMessage, playerBuffer.Bytes())
+		player.Controller.OnUpdate(float32(SESSION_DELTA_TIME.Seconds()), player.Id, gs)
 	}
 }
 
 func (gs *GameSession) Run() {
 	tick := time.NewTicker(SESSION_DELTA_TIME)
-	pauseTimer := time.NewTimer(0)
-	pauseTimer.Stop()
+	gs.PauseTimer.Stop()
 
 	defer tick.Stop()
-	defer pauseTimer.Stop()
+	defer gs.PauseTimer.Stop()
 
 	// Game session is paused until both players are ready
 	gs.IsRunning = false
@@ -503,6 +610,7 @@ func (gs *GameSession) Run() {
 	for {
 		select {
 		case player := <-gs.RegisterPlayer:
+			fmt.Println("Player registered")
 			gs.AddPlayer(player)
 
 			// Start session if full
@@ -515,7 +623,19 @@ func (gs *GameSession) Run() {
 			}
 		case player := <-gs.UnregisterPlayer:
 			gs.RemovePlayer(player)
-			if len(gs.Players) == 0 {
+
+			gs.EndGame()
+
+			onlyBots := true
+			for _, player := range gs.Players {
+				_, isBot := player.Controller.(*BotController)
+				if !isBot {
+					onlyBots = false
+					break
+				}
+			}
+
+			if len(gs.Players) == 0 || onlyBots {
 				gs.Sessions.Unregister <- gs
 				return
 			}
@@ -529,6 +649,8 @@ func (gs *GameSession) Run() {
 		case <-tick.C:
 			gs.Update(SESSION_DELTA_TIME)
 			gs.Broadcast()
+		case <-gs.PauseTimer.C:
+			gs.IsRunning = true
 		}
 
 	}

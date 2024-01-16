@@ -27,5 +27,8 @@ COPY --from=build-stage /pong /pong
 EXPOSE 443
 EXPOSE 80
 
+# Define the environment variables
+ENV PRODUCTION=true
+
 # Run the application
 ENTRYPOINT ["/pong"]

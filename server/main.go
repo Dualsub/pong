@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/gorilla/websocket"
@@ -17,6 +18,11 @@ var upgrader = websocket.Upgrader{
 }
 
 func handleSessions(sessions *Sessions, w http.ResponseWriter, r *http.Request) {
+	// Make CORS happy
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Content-Type", "application/json")
+
 	fmt.Fprintf(w, "[")
 	var index int = 0
 	for id := range sessions.Sessions {
@@ -31,13 +37,6 @@ func handleSessions(sessions *Sessions, w http.ResponseWriter, r *http.Request) 
 		index++
 	}
 	fmt.Fprintf(w, "]")
-
-	// Make CORS happy
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	w.Header().Set("Content-Type", "application/json")
-
-	w.WriteHeader(http.StatusOK)
 }
 
 func handlePlay(sessions *Sessions, w http.ResponseWriter, r *http.Request) {
@@ -62,7 +61,7 @@ func handlePlay(sessions *Sessions, w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	player := &Player{
-		Connection:  conn,
+		Controller:  NewPlayerController(conn),
 		Score:       0,
 		X:           0,
 		Y:           0,
@@ -72,6 +71,30 @@ func handlePlay(sessions *Sessions, w http.ResponseWriter, r *http.Request) {
 	}
 
 	session.RegisterPlayer <- player
+
+	{
+		ai, err := strconv.ParseBool(r.URL.Query().Get("ai"))
+		if err != nil {
+			ai = false
+		}
+
+		fmt.Println("ai", ai)
+
+		if !ok && ai {
+
+			ai := &Player{
+				Controller:  NewBotController(),
+				Score:       0,
+				X:           0,
+				Y:           0,
+				Session:     session,
+				InputStates: make([]InputState, 0),
+				Ready:       make(chan bool),
+			}
+
+			session.RegisterPlayer <- ai
+		}
+	}
 
 	playerOk := false
 
@@ -109,9 +132,13 @@ loop:
 	session.UnregisterPlayer <- player
 }
 
-const production = false
-
 func main() {
+
+	production, err := strconv.ParseBool(os.Getenv("PRODUCTION"))
+
+	if err != nil {
+		production = false
+	}
 
 	sessions := NewSessions()
 	go sessions.Run()
@@ -125,6 +152,8 @@ func main() {
 	})
 
 	if production {
+
+		fmt.Println("Running in Production mode")
 
 		certManager := &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
@@ -155,8 +184,8 @@ func main() {
 
 	} else {
 
-		fmt.Println("Server listening on :8080")
-		err := http.ListenAndServe(":8080", nil)
+		fmt.Println("Server listening on :5000")
+		err := http.ListenAndServe(":5000", nil)
 		if err != nil {
 			fmt.Printf("Server error: %s\n", err)
 		}
