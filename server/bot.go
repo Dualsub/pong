@@ -24,7 +24,7 @@ func NewBotController() *BotController {
 		PrevTargetY: float32(COURT_HEIGHT / 2),
 		Sequence:    0,
 		Kp:          100.0 / COURT_HEIGHT,
-		Ki:          0.0 / COURT_HEIGHT,
+		Ki:          1.0 / COURT_HEIGHT,
 		Kd:          1.0 / COURT_HEIGHT,
 	}
 }
@@ -42,12 +42,10 @@ func (bc *BotController) OnUpdate(dt float32, playerId int32, session *GameSessi
 	targetY := PredictBallCollision(&session.Ball, playerX) - PLAYER_HEIGHT/2
 	// If ball is moving away from player, center player
 	if (playerX-session.Ball.X)/session.Ball.VelocityX < 0 {
-		targetY = bc.PrevTargetY
+		targetY = float32(COURT_HEIGHT / 2)
 	}
 
 	bc.PrevTargetY = targetY
-
-	// fmt.Printf("targetY: %f\n", targetY)
 
 	err := playerY - targetY
 	bc.Sum += err * dt
