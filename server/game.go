@@ -8,8 +8,6 @@ import (
 	"math"
 	mathrand "math/rand"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 // 60 Hz
@@ -20,10 +18,6 @@ const MAX_BALL_SPEED_FACTOR = 10
 const BALL_SPEED_RATE = 1.018
 const BALL_RADIUS = 10
 
-const PLAYER_SPEED = 100
-const PLAYER_WIDTH = 10
-const PLAYER_HEIGHT = 100
-
 const ATTACK_DIRECTION = math.Pi / 12
 const ATTACK_SPEED_FACTOR = 2
 
@@ -32,43 +26,25 @@ const COURT_HEIGHT = 600
 
 const MAX_PLAYERS = 2
 
-const GAME_SCORE_LIMIT = 2
-const ROUND_RESET_TIME = 0 * time.Second
-const GAME_RESET_TIME = 0 * time.Second
+const GAME_SCORE_LIMIT = 11
+const GAME_SCORE_DIFFERENCE = 2
+
+const GAME_RESET_TIME = 5 * time.Second
+const ROUND_RESET_TIME = 750 * time.Millisecond
 
 // Save some calculations :)
 const INV_SQRT_2 = 1.0 / math.Sqrt2
 
-type InputState struct {
-	UpPressed   bool
-	DownPressed bool
-	Timestamp   time.Time
-	Sequence    uint32
-}
+//go:generate stringer -type=GameState
+type GameState uint8
 
-type InputUpdate struct {
-	PlayerId   int32
-	InputState InputState
-}
-
-type Controller interface {
-	OnUpdate(dt float32, playerId int32, session *GameSession)
-}
-
-type PlayerController struct {
-	Connection *websocket.Conn
-}
-
-type Player struct {
-	Id          int32
-	Controller  Controller
-	Score       int32
-	X           float32
-	Y           float32
-	InputStates []InputState
-	Session     *GameSession
-	Ready       chan bool
-}
+const (
+	WaitingForPlayers GameState = iota
+	Starting
+	Running
+	InBetweenRounds
+	GameOver
+)
 
 type Ball struct {
 	X         float32
@@ -85,20 +61,15 @@ type FrameEvents struct {
 	NewRound       bool
 }
 
-type Countdown struct {
-	Countdown int32
-	// Maybe add type later
-}
-
 type GameSession struct {
-	Id        int
-	Players   map[int32]*Player
-	Ball      Ball
-	Time      time.Duration
-	IsRunning bool
-	Sessions  *Sessions
-	Countdown Countdown
-	Events    FrameEvents
+	Id           int
+	Players      map[int32]*Player
+	Ball         Ball
+	Time         time.Duration
+	State        GameState
+	ShouldUpdate bool
+	Sessions     *Sessions
+	Events       FrameEvents
 
 	StateBuffer bytes.Buffer
 
@@ -107,37 +78,6 @@ type GameSession struct {
 	RegisterInput    chan InputUpdate
 
 	PauseTimer *time.Timer
-}
-
-type Sessions struct {
-	Sessions      map[int]*GameSession
-	Register      chan *GameSession
-	Unregister    chan *GameSession
-	RegisterInput chan InputUpdate
-}
-
-func NewSessions() *Sessions {
-	return &Sessions{
-		Sessions:      make(map[int]*GameSession),
-		Register:      make(chan *GameSession),
-		Unregister:    make(chan *GameSession),
-		RegisterInput: make(chan InputUpdate),
-	}
-}
-
-func (sessions *Sessions) Run() {
-	for {
-		select {
-		case session := <-sessions.Register:
-			sessions.Sessions[session.Id] = session
-			session.Sessions = sessions
-			fmt.Println("Registered session", session.Id)
-			go session.Run()
-		case session := <-sessions.Unregister:
-			delete(sessions.Sessions, session.Id)
-			fmt.Println("Unregistered session", session.Id)
-		}
-	}
 }
 
 func Clamp(f float32, min float32, max float32) float32 {
@@ -162,12 +102,13 @@ func NewBall() Ball {
 
 func NewGameSession(id int) *GameSession {
 	return &GameSession{
-		Id:        id,
-		Players:   make(map[int32]*Player),
-		Ball:      NewBall(),
-		Time:      0,
-		IsRunning: true,
-		Events:    FrameEvents{},
+		Id:           id,
+		Players:      make(map[int32]*Player),
+		Ball:         NewBall(),
+		Time:         0,
+		ShouldUpdate: false,
+		State:        WaitingForPlayers,
+		Events:       FrameEvents{},
 
 		RegisterPlayer:   make(chan *Player, 1),
 		UnregisterPlayer: make(chan *Player, 1),
@@ -224,7 +165,7 @@ func (gs *GameSession) RemovePlayer(player *Player) {
 }
 
 func (gs *GameSession) AddPlayerInput(inputUpdate InputUpdate) {
-	if !gs.IsRunning {
+	if !gs.ShouldUpdate {
 		return
 	}
 
@@ -237,9 +178,30 @@ func (gs *GameSession) AddPlayerInput(inputUpdate InputUpdate) {
 	player.InputStates = append(player.InputStates, inputUpdate.InputState)
 }
 
-func (gs *GameSession) EndGame() {
+func (gs *GameSession) BeginGame() {
+	gs.State = Starting
+	gs.PauseGame(GAME_RESET_TIME)
+}
 
+func (gs *GameSession) EndGame() {
+	gs.State = GameOver
+	gs.PauseGame(GAME_RESET_TIME)
+}
+
+func (gs *GameSession) InterruptGame() {
+	gs.PauseTimer.Stop()
+	gs.State = WaitingForPlayers
+	gs.ShouldUpdate = false
 	gs.ResetGame()
+}
+
+func (gs *GameSession) BeginRound() {
+	gs.State = Running
+}
+
+func (gs *GameSession) EndRound() {
+	gs.State = InBetweenRounds
+	gs.PauseGame(ROUND_RESET_TIME)
 }
 
 func (gs *GameSession) ResetGame() {
@@ -273,88 +235,24 @@ func (gs *GameSession) ResetRound() {
 }
 
 func (gs *GameSession) PauseGame(duration time.Duration) {
-	gs.IsRunning = false
+	gs.ShouldUpdate = false
 	gs.PauseTimer.Reset(duration)
 }
 
-func ReadInput(p []byte, playerId int32) InputUpdate {
-	var rawInputState struct {
-		UpPressed   byte
-		DownPressed byte
-		Timestamp   int64 // Retrieved on client side using Date.now()
-		Sequence    uint32
-	}
-
-	if err := binary.Read(bytes.NewReader(p), binary.LittleEndian, &rawInputState); err != nil {
-		panic(err)
-	}
-
-	timestamp := time.Unix(0, rawInputState.Timestamp*int64(time.Millisecond))
-	// Get server timestamp, if it's in the future, use it instead
-	if timestamp.After(time.Now()) || timestamp.Before(time.Now().Add(-1*time.Second)) {
-		timestamp = time.Now()
-	}
-
-	return InputUpdate{
-		PlayerId: playerId,
-		InputState: InputState{
-			UpPressed:   rawInputState.UpPressed == 1,
-			DownPressed: rawInputState.DownPressed == 1,
-			Timestamp:   timestamp,
-			Sequence:    rawInputState.Sequence,
-		},
-	}
-}
-
-// Function to check if two line segments intersect
-func intersects(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2 float32) bool {
-	// Calculate vectors & determinants
-	dax := ax2 - ax1
-	day := ay2 - ay1
-	dbx := bx2 - bx1
-	dby := by2 - by1
-	det := dax*dby - dbx*day
-
-	if det == 0 {
-		return false // lines are parallel
-	}
-
-	s := (1 / det) * ((ax1-bx1)*dby - (ay1-by1)*dbx)
-	t := (1 / det) * ((bx1-ax1)*day - (by1-ay1)*dax)
-
-	return s >= 0 && s <= 1 && t >= 0 && t <= 1
-}
-
 func IsColliding(oldBall *Ball, ball *Ball, player *Player) bool {
-
-	// Check for direct collision with current and previous state
 	directCollision := (ball.X-BALL_RADIUS < player.X+PLAYER_WIDTH) && (ball.X+BALL_RADIUS > player.X) && (ball.Y-BALL_RADIUS < player.Y+PLAYER_HEIGHT) && (ball.Y+BALL_RADIUS > player.Y)
 
-	// Define player's bounding box edges
-	// leftEdge := player.X
-	// rightEdge := player.X + PLAYER_WIDTH
-	// topEdge := player.Y
-	// bottomEdge := player.Y + PLAYER_HEIGHT
+	// Could add some better collision detection here...
 
-	// Check for intersection with each edge of the player's bounding box
-	// hitLeft := intersects(oldBall.X, oldBall.Y, ball.X, ball.Y, leftEdge, topEdge, leftEdge, bottomEdge)
-	// hitRight := intersects(oldBall.X, oldBall.Y, ball.X, ball.Y, rightEdge, topEdge, rightEdge, bottomEdge)
-	// hitTop := intersects(oldBall.X, oldBall.Y, ball.X, ball.Y, leftEdge, topEdge, rightEdge, topEdge)
-	// hitBottom := intersects(oldBall.X, oldBall.Y, ball.X, ball.Y, leftEdge, bottomEdge, rightEdge, bottomEdge)
-
-	// Return true if any collision is detected
 	return directCollision
 }
 
 func (gs *GameSession) Update(dt time.Duration) {
 
 	// Reset events
-	gs.Events.BallCollided = false
-	gs.Events.BallHitPlayer = false
-	gs.Events.BallWasSmashed = false
-	gs.Events.NewRound = false
+	gs.Events = FrameEvents{}
 
-	if !gs.IsRunning {
+	if !gs.ShouldUpdate {
 		return
 	}
 
@@ -457,6 +355,7 @@ func (gs *GameSession) Update(dt time.Duration) {
 		gs.Events.BallWasSmashed = true
 
 		speedMagnitude := math.Sqrt(float64(gs.Ball.VelocityX*gs.Ball.VelocityX+gs.Ball.VelocityY*gs.Ball.VelocityY)) * ATTACK_SPEED_FACTOR
+		speedMagnitude = math.Min(speedMagnitude, BALL_SPEED*MAX_BALL_SPEED_FACTOR)
 		var xSign float32 = 1.0
 		if gs.Ball.VelocityX < 0 {
 			xSign = -1.0
@@ -478,7 +377,7 @@ func (gs *GameSession) Update(dt time.Duration) {
 	// Check if ball is out of bounds, then which player is furthest away
 	if gs.Ball.X < 0 || gs.Ball.X > float32(COURT_WIDTH) {
 		// Find player furthest away from ball
-		var furthestPlayer *Player
+		var furthestPlayer *Player = nil
 		for _, player := range gs.Players {
 			if furthestPlayer == nil {
 				furthestPlayer = player
@@ -492,41 +391,24 @@ func (gs *GameSession) Update(dt time.Duration) {
 		// Increment furthest player score
 		furthestPlayer.Score++
 
+		highestScore := int32(0)
+		nextHighestScore := int32(0)
+
+		for _, player := range gs.Players {
+			if player.Score > highestScore {
+				nextHighestScore = highestScore
+				highestScore = player.Score
+			}
+		}
+
 		// Check if game is over
-		if furthestPlayer.Score >= GAME_SCORE_LIMIT {
+		if highestScore >= GAME_SCORE_LIMIT && (highestScore-nextHighestScore) >= GAME_SCORE_DIFFERENCE {
 			gs.EndGame()
 		} else {
-			gs.ResetRound()
+			gs.EndRound()
 		}
 	}
 
-}
-
-func NewPlayerController(conn *websocket.Conn) *PlayerController {
-	return &PlayerController{
-		Connection: conn,
-	}
-}
-
-func (pc *PlayerController) OnUpdate(dt float32, playerId int32, session *GameSession) {
-	var playerBuffer bytes.Buffer
-	if err := binary.Write(&playerBuffer, binary.LittleEndian, playerId); err != nil {
-		panic(err)
-	}
-
-	player := session.Players[playerId]
-
-	var lastSequence uint32 = 0
-	if len(player.InputStates) > 0 {
-		lastSequence = player.InputStates[len(player.InputStates)-1].Sequence
-	}
-
-	if err := binary.Write(&playerBuffer, binary.LittleEndian, lastSequence); err != nil {
-		panic(err)
-	}
-
-	playerBuffer.Write(session.StateBuffer.Bytes())
-	pc.Connection.WriteMessage(websocket.BinaryMessage, playerBuffer.Bytes())
 }
 
 func (gs *GameSession) Broadcast() {
@@ -588,6 +470,10 @@ func (gs *GameSession) Broadcast() {
 		panic(err)
 	}
 
+	if err := binary.Write(&buffer, binary.LittleEndian, gs.State); err != nil {
+		panic(err)
+	}
+
 	gs.StateBuffer = buffer
 
 	for _, player := range gs.Players {
@@ -597,13 +483,17 @@ func (gs *GameSession) Broadcast() {
 
 func (gs *GameSession) Run() {
 	tick := time.NewTicker(SESSION_DELTA_TIME)
-	gs.PauseTimer.Stop()
 
 	defer tick.Stop()
-	defer gs.PauseTimer.Stop()
+	defer func() {
+		if gs.PauseTimer != nil {
+			gs.PauseTimer.Stop()
+		}
+	}()
 
 	// Game session is paused until both players are ready
-	gs.IsRunning = false
+	gs.ShouldUpdate = false
+	gs.State = WaitingForPlayers
 
 	fmt.Println("Running session:", gs.Id)
 
@@ -615,16 +505,14 @@ func (gs *GameSession) Run() {
 
 			// Start session if full
 			if len(gs.Players) == MAX_PLAYERS {
-				gs.ResetGame()
-				gs.IsRunning = true
+				gs.BeginGame()
 			} else {
-				gs.IsRunning = false
+				gs.ShouldUpdate = false
 				gs.ResetRound()
 			}
 		case player := <-gs.UnregisterPlayer:
 			gs.RemovePlayer(player)
-
-			gs.EndGame()
+			gs.InterruptGame()
 
 			onlyBots := true
 			for _, player := range gs.Players {
@@ -641,7 +529,7 @@ func (gs *GameSession) Run() {
 			}
 
 			if len(gs.Players) < MAX_PLAYERS {
-				gs.IsRunning = false
+				gs.ShouldUpdate = false
 				gs.ResetRound()
 			}
 		case inputUpdate := <-gs.RegisterInput:
@@ -650,7 +538,21 @@ func (gs *GameSession) Run() {
 			gs.Update(SESSION_DELTA_TIME)
 			gs.Broadcast()
 		case <-gs.PauseTimer.C:
-			gs.IsRunning = true
+			// State transitions
+			if gs.State == GameOver {
+				gs.ResetGame()
+				gs.ShouldUpdate = false
+				gs.BeginGame()
+			} else if gs.State == Starting {
+				gs.ShouldUpdate = true
+				gs.BeginRound()
+			} else if gs.State == InBetweenRounds {
+				gs.ResetRound()
+				gs.ShouldUpdate = true
+				gs.BeginRound()
+			} else if gs.State == Running {
+				gs.ShouldUpdate = true
+			}
 		}
 
 	}
